@@ -916,9 +916,31 @@ std::uint32_t EmitTrigCycleF32(SpirvEmitterState& state, std::uint32_t src, bool
 
 std::uint32_t EmitF16BitsToF32(SpirvEmitterState& state, std::uint32_t bits) {
     const auto unpacked = state.module.AllocateId();
-    const auto result = state.module.AllocateId();
+    const auto normal = state.module.AllocateId();
     state.module.AddFunction(spv::OpExtInst, TypeF32Vector(state, 2), unpacked, GlslStd450(state), GLSLstd450UnpackHalf2x16, bits);
-    state.module.AddFunction(spv::OpCompositeExtract, TypeF32(state), result, unpacked, 0u);
+    state.module.AddFunction(spv::OpCompositeExtract, TypeF32(state), normal, unpacked, 0u);
+    const auto magnitude = state.module.AllocateId();
+    const auto offset = state.module.AllocateId();
+    const auto subnormal = state.module.AllocateId();
+    const auto fraction = state.module.AllocateId();
+    const auto scaled = state.module.AllocateId();
+    const auto scaledBits = state.module.AllocateId();
+    const auto sign = state.module.AllocateId();
+    const auto signShifted = state.module.AllocateId();
+    const auto signedBits = state.module.AllocateId();
+    const auto exact = state.module.AllocateId();
+    const auto result = state.module.AllocateId();
+    state.module.AddFunction(spv::OpBitwiseAnd, TypeU32(state), magnitude, bits, ConstantU32(state, 0x7fffu));
+    state.module.AddFunction(spv::OpISub, TypeU32(state), offset, magnitude, ConstantU32(state, 1u));
+    state.module.AddFunction(spv::OpULessThan, TypeBool(state), subnormal, offset, ConstantU32(state, 0x3ffu));
+    state.module.AddFunction(spv::OpConvertUToF, TypeF32(state), fraction, magnitude);
+    state.module.AddFunction(spv::OpFMul, TypeF32(state), scaled, fraction, ConstantF32(state, 0x33800000u));
+    state.module.AddFunction(spv::OpBitcast, TypeU32(state), scaledBits, scaled);
+    state.module.AddFunction(spv::OpBitwiseAnd, TypeU32(state), sign, bits, ConstantU32(state, 0x8000u));
+    state.module.AddFunction(spv::OpShiftLeftLogical, TypeU32(state), signShifted, sign, ConstantU32(state, 16u));
+    state.module.AddFunction(spv::OpBitwiseOr, TypeU32(state), signedBits, scaledBits, signShifted);
+    state.module.AddFunction(spv::OpBitcast, TypeF32(state), exact, signedBits);
+    state.module.AddFunction(spv::OpSelect, TypeF32(state), result, subnormal, exact, normal);
     return result;
 }
 
