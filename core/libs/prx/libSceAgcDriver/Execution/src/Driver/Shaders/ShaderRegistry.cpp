@@ -122,7 +122,7 @@ struct ShaderPreparationTransaction::State {
     };
     static std::mutex writers;
     static thread_local State* active;
-    std::unique_lock<std::mutex> lock{writers};
+    std::unique_lock<std::mutex> lock{writers, std::defer_lock};
     std::map<PreparedShaders*, Change> changes;
     bool failed = false;
 };
@@ -143,8 +143,14 @@ ShaderPreparationTransaction::~ShaderPreparationTransaction() {
     if (state != nullptr) State::active = nullptr;
 }
 
+void ShaderPreparationTransaction::Lock() {
+    require(!committed, "shader preparation transaction is already committed");
+    if (!root->lock.owns_lock()) root->lock.lock();
+}
+
 PreparedShaderState& ShaderPreparationTransaction::Edit(const ShaderSnapshot& snapshot) {
     require(!committed, "shader preparation transaction is already committed");
+    if (!root->lock.owns_lock()) root->lock.lock();
     auto& changes = root->changes;
     const auto found = changes.find(snapshot.prepared.get());
     if (found != changes.end()) {
@@ -158,12 +164,25 @@ PreparedShaderState& ShaderPreparationTransaction::Edit(const ShaderSnapshot& sn
 
 const PreparedShaderState& ShaderPreparationTransaction::Read(const ShaderSnapshot& snapshot) const {
     require(!committed, "shader preparation transaction is already committed");
+    if (!root->lock.owns_lock()) root->lock.lock();
     auto& changes = root->changes;
     const auto found = changes.find(snapshot.prepared.get());
     if (found != changes.end()) return found->second.prepared;
     std::unique_lock lock(snapshot.prepared->mutex);
     AwaitRegisteredPreparation(*snapshot.prepared, lock);
     return changes.emplace(snapshot.prepared.get(), State::Change{snapshot.prepared, *snapshot.prepared, false, snapshot.prepared->entries.size(), snapshot.prepared->registeredAbis.size()}).first->second.prepared;
+}
+
+void ShaderPreparationTransaction::Peek(const ShaderSnapshot& snapshot, const std::function<void(const PreparedShaderState&)>& visit) const {
+    require(!committed, "shader preparation transaction is already committed");
+    const auto found = root->changes.find(snapshot.prepared.get());
+    if (found != root->changes.end()) {
+        visit(found->second.prepared);
+        return;
+    }
+    std::unique_lock lock(snapshot.prepared->mutex);
+    AwaitRegisteredPreparation(*snapshot.prepared, lock);
+    visit(*snapshot.prepared);
 }
 
 void ShaderPreparationTransaction::Commit() {
@@ -238,6 +257,7 @@ std::shared_ptr<const ShaderSnapshot> RegisteredProgram(const ShaderRegistry& re
 
 void PublishRegisteredShader(std::shared_ptr<ShaderRegistry>& registry, const std::shared_ptr<const ShaderSnapshot>& snapshot) {
     ShaderPreparationTransaction transaction;
+    transaction.Lock();
     auto published = snapshot;
     if (registry != nullptr) {
         const auto found = registry->find(snapshot->codeAddress);
@@ -696,12 +716,14 @@ std::vector<PreparedGraphicsStage> PrepareGraphicsStages(const DrawDecode& decod
         std::vector<std::uint64_t> key;
         ShaderRecompiler::BuildPreparedShaderKey(request, key);
         std::shared_ptr<const ShaderRecompiler::SourceHandle> handle;
-        for (const auto& entry : transaction.Read(*program.snapshot).entries) {
-            if (entry.codeOffset == program.codeOffset && ShaderRecompiler::MatchesPreparedShader(request, *entry.handle, key)) {
-                handle = entry.handle;
-                break;
+        transaction.Peek(*program.snapshot, [&](const PreparedShaderState& current) {
+            for (const auto& entry : current.entries) {
+                if (entry.codeOffset == program.codeOffset && ShaderRecompiler::MatchesPreparedShader(request, *entry.handle, key)) {
+                    handle = entry.handle;
+                    break;
+                }
             }
-        }
+        });
         if (handle == nullptr) {
             PerformanceTimer timing("Shader.PrepareArtifact");
             handle = PrepareShaderWithDiagnostics(request);
@@ -750,13 +772,22 @@ void Driver::ResolveGraphicsStagesAbi(std::span<const Shader* const> stages, std
     auto& key = HostThreadLocal<std::vector<std::uint64_t>, GraphicsAbiKeyStorage>();
     BuildRegisteredAbiKey(state, *localDevice, key);
     const auto primitiveType = state.userConfig.find(0x242u);
-    for (const auto& abi : transaction.Read(*owner).graphicsAbis) {
-        if (abi.key != key || abi.registry.lock() != registry) continue;
-        for (const auto& stage : abi.stages) {
-            const auto snapshot = stage.lock();
-            require(snapshot != nullptr, "prepared graphics ABI lost a registered stage");
-            if (snapshot->type != 1) ResolvePreparedGraphics(*snapshot, {}, primitiveType == state.userConfig.end() ? 0u : primitiveType->second, localDevice->Target());
+    const auto matches = [&](const PreparedShaderState::GraphicsAbi& abi) { return abi.key == key && abi.registry.lock() == registry; };
+    const auto resolvePrepared = [&] {
+        for (const auto& abi : transaction.Read(*owner).graphicsAbis) {
+            if (!matches(abi)) continue;
+            for (const auto& stage : abi.stages) {
+                const auto snapshot = stage.lock();
+                require(snapshot != nullptr, "prepared graphics ABI lost a registered stage");
+                if (snapshot->type != 1) ResolvePreparedGraphics(*snapshot, {}, primitiveType == state.userConfig.end() ? 0u : primitiveType->second, localDevice->Target());
+            }
+            return true;
         }
+        return false;
+    };
+    bool known = false;
+    transaction.Peek(*owner, [&](const PreparedShaderState& current) { known = std::ranges::any_of(current.graphicsAbis, matches); });
+    if (known && resolvePrepared()) {
         transaction.Commit();
         return;
     }
@@ -764,6 +795,10 @@ void Driver::ResolveGraphicsStagesAbi(std::span<const Shader* const> stages, std
     decoded.state.stages = Graphics::DecodeShaderStages(state);
     DecodeGraphicsPrograms(decoded, state, *registry, true, false);
     auto prepared = PrepareGraphicsStages(decoded, localDevice->Target());
+    if (resolvePrepared()) {
+        transaction.Commit();
+        return;
+    }
     for (auto& stage : prepared) {
         const auto& entries = transaction.Read(*stage.snapshot).entries;
         const auto duplicate = std::ranges::any_of(entries, [&](const auto& existing) { return existing.codeOffset == stage.entry.codeOffset && existing.handle->artifact == stage.entry.handle->artifact; });
@@ -813,12 +848,18 @@ void Driver::ResolveShaderAbi(const Shader* shader, std::span<const ShaderRegist
     struct RegisteredAbiKeyStorage {};
     auto& key = HostThreadLocal<std::vector<std::uint64_t>, RegisteredAbiKeyStorage>();
     BuildRegisteredAbiKey(state, *localDevice, key);
-    const auto& registeredAbis = transaction.Read(*snapshot).registeredAbis;
-    if (std::ranges::find(registeredAbis, key) != registeredAbis.end()) {
+    const auto resolved = [&](const PreparedShaderState& current) { return std::ranges::find(current.registeredAbis, key) != current.registeredAbis.end(); };
+    bool known = false;
+    transaction.Peek(*snapshot, [&](const PreparedShaderState& current) { known = resolved(current); });
+    if (known) {
         transaction.Commit();
         return;
     }
     auto entries = PrepareRegistered(*snapshot, *localDevice, state, false);
+    if (resolved(transaction.Read(*snapshot))) {
+        transaction.Commit();
+        return;
+    }
     auto& prepared = transaction.Edit(*snapshot);
     for (auto& entry : entries) {
         const auto duplicate = std::ranges::any_of(prepared.entries, [&](const auto& existing) { return existing.handle->artifact == entry.handle->artifact; });
@@ -955,6 +996,7 @@ void Driver::RegisterShader(const Shader* shader) {
     PerformanceContext timingContext(FrameTiming::Preparation());
     PerformanceTimer timing("Shader.Register");
     ShaderPreparationTransaction transaction;
+    transaction.Lock();
     CheckFailure();
     GuestMemory::CheckRange(shader, sizeof(Shader), 1);
     Shader fields;

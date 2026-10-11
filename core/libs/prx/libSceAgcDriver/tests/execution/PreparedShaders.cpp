@@ -432,6 +432,71 @@ void RegistrationWithoutSpecials() {
     AgcDriverWaitIdle_nid_postfix();
 }
 
+void AbiResolutionOutsidePreparations() {
+    alignas(256) static std::array<std::uint32_t, 1> code{0xbf810000u};
+    static struct Header {
+        Shader shader{};
+        std::array<ShaderRegister, 7> registers{};
+        ShaderSpecialRegs specials{};
+    } header;
+    const auto address = reinterpret_cast<std::uintptr_t>(code.data());
+    header.shader.file_header = 0x34333231u;
+    header.shader.version = 0x18;
+    header.shader.header_size = sizeof(header);
+    header.shader.shader_size = sizeof(code);
+    header.shader.code = code.data();
+    header.shader.sh_registers = header.registers.data();
+    header.shader.num_sh_registers = header.registers.size();
+    header.shader.specials = &header.specials;
+    header.specials.dispatch_modifier = 0x8000;
+    header.registers = {{{0x20c, static_cast<std::uint32_t>(address >> 8u)}, {0x20d, static_cast<std::uint32_t>(address >> 40u)}, {0x207, 1}, {0x208, 1}, {0x209, 1}, {0x212, 0}, {0x213, 0}}};
+    AgcDriverRegisterShader_nid_postfix(&header.shader);
+    const auto context = [](std::uint32_t value) { return std::array<ShaderRegister, 1>{{{0x1b6, value}}}; };
+    const auto resolve = [&](std::uint32_t value) {
+        const auto registers = context(value);
+        AgcDriverResolveShaderAbi_nid_postfix(&header.shader, registers, {});
+    };
+    resolve(0);
+    AgcDriver::DriverDetail::ShaderSnapshot unrelated{};
+    std::future<void> known;
+    std::future<void> fresh;
+    bool knownFinished = false;
+    bool freshPublished = false;
+    {
+        AgcDriver::DriverDetail::ShaderPreparationTransaction transaction;
+        transaction.Edit(unrelated).rectangleRequested = true;
+        known = std::async(std::launch::async, [&] { resolve(0); });
+        knownFinished = known.wait_for(std::chrono::seconds(10)) == std::future_status::ready;
+        fresh = std::async(std::launch::async, [&] { resolve(1); });
+        freshPublished = fresh.wait_for(std::chrono::milliseconds(200)) == std::future_status::ready;
+        transaction.Commit();
+    }
+    known.get();
+    fresh.get();
+    Require(knownFinished, "a resolved shader ABI waited for an unrelated shader preparation");
+    Require(!freshPublished, "a new shader ABI was published inside an unfinished shader preparation");
+    std::barrier start(4);
+    std::vector<std::future<void>> resolutions;
+    for (unsigned worker = 0; worker < 4; ++worker) {
+        resolutions.push_back(std::async(std::launch::async, [&] {
+            start.arrive_and_wait();
+            resolve(2);
+        }));
+    }
+    for (auto& resolution : resolutions) resolution.get();
+    std::future<void> raced;
+    bool racedKnown = false;
+    {
+        AgcDriver::DriverDetail::ShaderPreparationTransaction transaction;
+        transaction.Edit(unrelated).rectangleRequested = true;
+        raced = std::async(std::launch::async, [&] { resolve(2); });
+        racedKnown = raced.wait_for(std::chrono::seconds(10)) == std::future_status::ready;
+        transaction.Commit();
+    }
+    raced.get();
+    Require(racedKnown, "a shader ABI resolved by racing threads was not published");
+}
+
 void Registration(bool indirect) {
     UnsupportedTypeRegistration();
     alignas(256) std::array<std::uint32_t, 1> code{0xbf810000u};
@@ -608,6 +673,7 @@ int main(int argc, char** argv) {
         device.reset();
         SharedCodeHeaders();
         RegistrationWithoutSpecials();
+        AbiResolutionOutsidePreparations();
         Registration(argc == 2);
         std::cout << "prepared shader and transactional registration tests passed\n";
         return 0;
