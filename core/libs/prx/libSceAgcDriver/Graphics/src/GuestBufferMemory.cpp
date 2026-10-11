@@ -438,8 +438,8 @@ const char* createChunkedDmaBufImport(const Context& context, HostImport& entry,
 }
 #endif
 
-const char* createImport(const Context& context, HostImport& entry, VkResult& failure) {
-    const char* step = createHostPointerImport(context, entry, failure);
+const char* createImport(const Context& context, HostImport& entry, VkResult& failure, bool preferDmaBuf = false) {
+    const char* step = preferDmaBuf ? "host pointer import skipped" : createHostPointerImport(context, entry, failure);
 #ifndef _WIN32
     int file = -1;
     std::uint64_t offset = 0;
@@ -452,6 +452,7 @@ const char* createImport(const Context& context, HostImport& entry, VkResult& fa
         }
         step = createDmaBufImport(context, entry, file, offset, failure);
     }
+    if (step != nullptr && preferDmaBuf) step = createHostPointerImport(context, entry, failure);
 #endif
     return step;
 }
@@ -595,7 +596,7 @@ const HostImport* importAllocation(const Context& context, HostImports& state, s
     VkResult result = VK_SUCCESS;
     const char* step = nullptr;
     GuestMemory::ImportWatched(base, bytes, [&] {
-        step = createImport(context, entry, result);
+        step = createImport(context, entry, result, state.unwatchImports && !state.unwatchDmaBufImports);
         return step == nullptr;
     });
     entry.unwatched = step == nullptr && (entry.dmaBuf ? state.unwatchDmaBufImports : state.unwatchImports);
