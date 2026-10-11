@@ -124,21 +124,27 @@ public:
         return std::any_of(textures.begin(), textures.end(), [&](const auto& entry) { return entry.second.get() == texture; });
     }
 
-    std::weak_ptr<StorageTexture> writer;
-    const StorageTexture* seeded = nullptr;
-    std::uint32_t writerLayer = 0;
+    struct PlaneWriter {
+        std::weak_ptr<StorageTexture> storage;
+        const StorageTexture* seeded = nullptr;
+        std::uint32_t layer = 0;
+    };
+    std::array<PlaneWriter, 2> writers;
 
-    void Transfer(StorageTexture& storage, bool into, std::uint32_t layer) {
+    void Transfer(StorageTexture& storage, bool into, std::uint32_t layer, bool stencil) {
         const auto& descriptor = storage.Descriptor();
         const bool d16 = target.format == VK_FORMAT_D16_UNORM || target.format == VK_FORMAT_D16_UNORM_S8_UINT;
         const auto storageFormat = storage.StorageFormat();
-        const bool sized = d16 ? (storageFormat == VK_FORMAT_R16_UINT || storageFormat == VK_FORMAT_R16_UNORM || storageFormat == VK_FORMAT_R16_SINT || storageFormat == VK_FORMAT_R16_SNORM || storageFormat == VK_FORMAT_R16_SFLOAT) : (storageFormat == VK_FORMAT_R32_SFLOAT || storageFormat == VK_FORMAT_R32_UINT || storageFormat == VK_FORMAT_R32_SINT);
+        const bool sized = stencil ? (storageFormat == VK_FORMAT_R8_UINT || storageFormat == VK_FORMAT_R8_UNORM || storageFormat == VK_FORMAT_R8_SINT || storageFormat == VK_FORMAT_R8_SNORM)
+                           : d16 ? (storageFormat == VK_FORMAT_R16_UINT || storageFormat == VK_FORMAT_R16_UNORM || storageFormat == VK_FORMAT_R16_SINT || storageFormat == VK_FORMAT_R16_SNORM || storageFormat == VK_FORMAT_R16_SFLOAT)
+                                 : (storageFormat == VK_FORMAT_R32_SFLOAT || storageFormat == VK_FORMAT_R32_UINT || storageFormat == VK_FORMAT_R32_SINT);
         if (!sized || descriptor.width != target.extent.width || descriptor.height != target.extent.height || descriptor.mipCount != 1 || (descriptor.dimension != TextureDimension::k2D && descriptor.dimension != TextureDimension::k2DArray) || (layer != 0 && layer > descriptor.depthOrLastArray)) {
             char text[256];
-            std::snprintf(text, sizeof(text), "AGC graphics: storage image access to depth surface 0x%llx (%ux%u, vk format %d) as a %ux%u image of vk format %d, dimension %d, %u mips is not implemented", static_cast<unsigned long long>(target.address), target.extent.width, target.extent.height, static_cast<int>(target.format), descriptor.width, descriptor.height, static_cast<int>(storageFormat), static_cast<int>(descriptor.dimension), descriptor.mipCount);
+            std::snprintf(text, sizeof(text), "AGC graphics: storage image access to the %s plane of depth surface 0x%llx (%ux%u, vk format %d) as a %ux%u image of vk format %d, dimension %d, %u mips is not implemented", stencil ? "stencil" : "depth", static_cast<unsigned long long>(target.address), target.extent.width, target.extent.height, static_cast<int>(target.format), descriptor.width, descriptor.height, static_cast<int>(storageFormat), static_cast<int>(descriptor.dimension), descriptor.mipCount);
             throw std::runtime_error(text);
         }
-        if (transferBuffer == nullptr) transferBuffer = std::make_unique<DeviceBuffer>(context, static_cast<std::size_t>(target.extent.width) * target.extent.height * (d16 ? 2u : 4u), VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+        auto& buffer = stencil ? stencilTransferBuffer : transferBuffer;
+        if (buffer == nullptr) buffer = std::make_unique<DeviceBuffer>(context, static_cast<std::size_t>(target.extent.width) * target.extent.height * (stencil ? 1u : d16 ? 2u : 4u), VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
         auto* recorder = RecorderFor(context);
         std::unique_ptr<CommandBatch> batch;
         if (recorder == nullptr) batch = std::make_unique<CommandBatch>(context);
@@ -149,16 +155,16 @@ public:
         constexpr VkAccessFlags all = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
         RecordMemoryBarrier(context, commands, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, all, VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT);
         VkBufferImageCopy depthRegion{};
-        depthRegion.imageSubresource = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1};
+        depthRegion.imageSubresource = {stencil ? VK_IMAGE_ASPECT_STENCIL_BIT : VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1};
         depthRegion.imageExtent = {target.extent.width, target.extent.height, 1};
         VkBufferImageCopy colorRegion = depthRegion;
         colorRegion.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         colorRegion.imageSubresource.baseArrayLayer = layer;
-        if (into) context.Function<PFN_vkCmdCopyImageToBuffer>("vkCmdCopyImageToBuffer")(commands, image, VK_IMAGE_LAYOUT_GENERAL, transferBuffer->Handle(), 1, &depthRegion);
-        else context.Function<PFN_vkCmdCopyImageToBuffer>("vkCmdCopyImageToBuffer")(commands, storage.Image(), VK_IMAGE_LAYOUT_GENERAL, transferBuffer->Handle(), 1, &colorRegion);
+        if (into) context.Function<PFN_vkCmdCopyImageToBuffer>("vkCmdCopyImageToBuffer")(commands, image, VK_IMAGE_LAYOUT_GENERAL, buffer->Handle(), 1, &depthRegion);
+        else context.Function<PFN_vkCmdCopyImageToBuffer>("vkCmdCopyImageToBuffer")(commands, storage.Image(), VK_IMAGE_LAYOUT_GENERAL, buffer->Handle(), 1, &colorRegion);
         RecordMemoryBarrier(context, commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT);
-        if (into) context.Function<PFN_vkCmdCopyBufferToImage>("vkCmdCopyBufferToImage")(commands, transferBuffer->Handle(), storage.Image(), VK_IMAGE_LAYOUT_GENERAL, 1, &colorRegion);
-        else context.Function<PFN_vkCmdCopyBufferToImage>("vkCmdCopyBufferToImage")(commands, transferBuffer->Handle(), image, VK_IMAGE_LAYOUT_GENERAL, 1, &depthRegion);
+        if (into) context.Function<PFN_vkCmdCopyBufferToImage>("vkCmdCopyBufferToImage")(commands, buffer->Handle(), storage.Image(), VK_IMAGE_LAYOUT_GENERAL, 1, &colorRegion);
+        else context.Function<PFN_vkCmdCopyBufferToImage>("vkCmdCopyBufferToImage")(commands, buffer->Handle(), image, VK_IMAGE_LAYOUT_GENERAL, 1, &depthRegion);
         RecordMemoryBarrier(context, commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, all);
         if (batch) batch->SubmitAndWait();
         else Recorder::CountBarriers(Recorder::CommandClass::Draw, 3);
@@ -172,8 +178,7 @@ public:
         const auto aspects = pendingClear & (VK_IMAGE_ASPECT_DEPTH_BIT | (target.stencilAddress != 0 ? VK_IMAGE_ASPECT_STENCIL_BIT : 0u));
         pendingClear = 0;
         if (aspects == 0) return;
-        writer.reset();
-        seeded = nullptr;
+        for (auto& writer : writers) writer = {};
         auto* recorder = RecorderFor(context);
         std::unique_ptr<CommandBatch> batch;
         if (recorder == nullptr) batch = std::make_unique<CommandBatch>(context);
@@ -189,10 +194,12 @@ public:
     }
 
     void TakeWrites() {
-        auto storage = writer.lock();
-        writer.reset();
-        seeded = nullptr;
-        if (storage != nullptr) Transfer(*storage, false, writerLayer);
+        for (std::size_t plane = 0; plane < writers.size(); ++plane) {
+            auto storage = writers[plane].storage.lock();
+            const auto layer = writers[plane].layer;
+            writers[plane] = {};
+            if (storage != nullptr) Transfer(*storage, false, layer, plane == 1u);
+        }
     }
 
     const Context context;
@@ -204,9 +211,11 @@ public:
 private:
     std::map<std::array<std::uint32_t, 12>, std::shared_ptr<Texture>> textures;
     std::unique_ptr<DeviceBuffer> transferBuffer;
+    std::unique_ptr<DeviceBuffer> stencilTransferBuffer;
     void release() noexcept {
         textures.clear();
         transferBuffer.reset();
+        stencilTransferBuffer.reset();
         if (view) context.Function<PFN_vkDestroyImageView>("vkDestroyImageView")(context.device, view, nullptr);
         if (image) context.Function<PFN_vkDestroyImage>("vkDestroyImage")(context.device, image, nullptr);
         if (memory) context.Function<PFN_vkFreeMemory>("vkFreeMemory")(context.device, memory, nullptr);
@@ -487,23 +496,27 @@ void SeedStorageFromDepth(const Context& context, const std::shared_ptr<StorageT
     std::lock_guard lock(surfacesMutex());
     const auto& list = surfaces();
     const auto& descriptor = storage->Descriptor();
-    const auto found = std::find_if(list.rbegin(), list.rend(), [&](const auto& surface) { return surface->context.device == context.device && surface->target.address == descriptor.baseAddress; });
+    const auto plane = [&](const auto& surface, std::uint64_t address, bool stencil) {
+        return surface->context.device == context.device && (stencil ? surface->target.stencilAddress != 0 && surface->target.stencilAddress == address && surface->target.address != address : surface->target.address == address);
+    };
+    auto found = std::find_if(list.rbegin(), list.rend(), [&](const auto& surface) { return plane(surface, descriptor.baseAddress, false); });
+    const bool stencil = found == list.rend();
+    if (stencil) found = std::find_if(list.rbegin(), list.rend(), [&](const auto& surface) { return plane(surface, descriptor.baseAddress, true); });
     if (found == list.rend()) return;
     const auto base = (*found)->target;
     const bool d16 = base.format == VK_FORMAT_D16_UNORM || base.format == VK_FORMAT_D16_UNORM_S8_UINT;
     const auto layers = descriptor.dimension == TextureDimension::k2DArray ? descriptor.depthOrLastArray + 1u : 1u;
     for (std::uint32_t layer = 0; layer < layers; ++layer) {
-        const auto address = base.address + static_cast<std::uint64_t>(layer) * DepthSliceBytes(base.extent, d16 ? 2u : 4u);
-        const auto slice = std::find_if(list.rbegin(), list.rend(), [&](const auto& surface) { return surface->context.device == context.device && surface->target.address == address && surface->target.extent.width == base.extent.width && surface->target.extent.height == base.extent.height && surface->target.format == base.format; });
+        const auto address = descriptor.baseAddress + static_cast<std::uint64_t>(layer) * DepthSliceBytes(base.extent, stencil ? 1u : d16 ? 2u : 4u);
+        const auto slice = std::find_if(list.rbegin(), list.rend(), [&](const auto& surface) { return plane(surface, address, stencil) && surface->target.extent.width == base.extent.width && surface->target.extent.height == base.extent.height && surface->target.format == base.format; });
         if (slice == list.rend()) continue;
         auto& surface = **slice;
-        if (surface.seeded == storage.get() && surface.writerLayer == layer && surface.writer.lock() == storage) continue;
+        auto& writer = surface.writers[stencil ? 1u : 0u];
+        if (writer.seeded == storage.get() && writer.layer == layer && writer.storage.lock() == storage) continue;
         surface.ApplyFastClear();
         surface.TakeWrites();
-        surface.Transfer(*storage, true, layer);
-        surface.writer = storage;
-        surface.seeded = storage.get();
-        surface.writerLayer = layer;
+        surface.Transfer(*storage, true, layer, stencil);
+        surface.writers[stencil ? 1u : 0u] = {storage, storage.get(), layer};
     }
 }
 
@@ -543,11 +556,6 @@ bool DepthSurfaceHolds(const Context& context, const GuestTextureResource& resou
 bool DepthSurfaceAt(std::uint64_t address) {
     std::lock_guard lock(surfacesMutex());
     return std::any_of(surfaces().begin(), surfaces().end(), [&](const auto& surface) { return surface->target.address == address || surface->target.stencilAddress == address; });
-}
-
-bool DepthStencilPlaneAt(std::uint64_t address) {
-    std::lock_guard lock(surfacesMutex());
-    return std::any_of(surfaces().begin(), surfaces().end(), [&](const auto& surface) { return surface->target.stencilAddress != 0 && surface->target.stencilAddress == address && surface->target.address != address; });
 }
 
 }
