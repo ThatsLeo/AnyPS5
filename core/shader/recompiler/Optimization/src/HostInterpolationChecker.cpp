@@ -1,8 +1,11 @@
 #include "Optimization/HostInterpolationChecker.hpp"
 #include "IntermediateRepresentation/IrBlock.hpp"
 #include "IntermediateRepresentation/IrMetadata/StageIO.hpp"
+#include "IntermediateRepresentation/IrBuilder.hpp"
 #include "Optimization/DeadCodeEliminator.hpp"
+#include "Optimization/HelperLanes.hpp"
 #include "Optimization/MaskedSelectEliminator.hpp"
+#include <algorithm>
 #include <array>
 #include <vector>
 
@@ -86,6 +89,20 @@ bool exact(const IrValue& inst, const IrProgram& program, const ShaderPixelInput
     return isBarycentric(*lookThrough(partial->Argument(2)), kind, 0u) && isBarycentric(*lookThrough(inst.Argument(2)), kind, 1u);
 }
 
+// A barycentric register overwritten in place under the initial EXEC keeps its word on helper
+// lanes only; those lanes read zero instead.
+void dropHelperBarycentrics(IrProgram& program) {
+    IrBuilder builder(program);
+    for (const auto& block : program.Blocks()) {
+        for (IrValue* inst : block->Instructions()) {
+            if (!isBarycentric(*inst)) continue;
+            const auto uses = inst->OperandUses();
+            if (!std::ranges::all_of(uses, [&](const IrUse& use) { return KeptOnlyOnHelperLanes(program, use); })) continue;
+            for (const IrUse& use : uses) use.user->ReplaceArgument(use.operand, &builder.Constant(0u));
+        }
+    }
+}
+
 bool sharesSlots(const IrProgram& program, const ShaderPixelInputInfo& pixel) {
     constexpr std::uint32_t unassigned = 3u;
     std::array<std::uint32_t, 32> interpolation {};
@@ -131,6 +148,8 @@ bool HostInterpolationChecker::Lower(IrProgram& program, const ShaderPixelInputI
     }
     DeadCodeEliminator{}.Eliminate(program);
     if (MaskedSelectEliminator{}.Eliminate(program).removedSelects != 0u) DeadCodeEliminator{}.Eliminate(program);
+    dropHelperBarycentrics(program);
+    DeadCodeEliminator{}.Eliminate(program);
     for (const auto& block : program.Blocks()) {
         for (const IrValue* inst : block->Instructions()) {
             if (isBarycentric(*inst) || inst->Opcode() == IrOpcode::InterpolateHostP1) return false;
