@@ -276,6 +276,7 @@ void TranslationContext::sMovB64(const RdnaInstruction& inst) {
 }
 
 void TranslationContext::sWqm(const RdnaInstruction& inst, bool wide) {
+    program.Metadata().wholeQuadMode = true;
     if (wide) {
         const std::array<IrU32, 2> source = readU32Pair(sourceAt(inst, 0u));
         const IrU64 wide64(ir.ConstructU64(source[0].Value(), source[1].Value()));

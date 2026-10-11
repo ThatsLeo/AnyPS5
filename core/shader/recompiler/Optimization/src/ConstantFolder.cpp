@@ -1,5 +1,6 @@
 #include "Optimization/ConstantFolder.hpp"
 #include "IntermediateRepresentation/IrBuilder.hpp"
+#include "RdnaDecoder/RdnaInstruction.hpp"
 
 #include <algorithm>
 #include <array>
@@ -211,24 +212,91 @@ bool forwardsWord(const IrUse& use) {
     return use.user->Opcode() == IrOpcode::Identity || use.user->Opcode() == IrOpcode::Phi || (use.user->Opcode() == IrOpcode::SelectU32 && use.operand != 0u);
 }
 
-void collectReaders(IrValue& value, std::vector<IrUse>& readers, std::vector<const IrValue*>& visited) {
+bool excludesHelperLanes(const IrValue& condition) {
+    if (condition.Opcode() != IrOpcode::IEqual32) {
+        return false;
+    }
+    const auto helper = [](const IrValue& value) {
+        if (value.Opcode() != IrOpcode::GetBuiltin) {
+            return false;
+        }
+        auto& kind = resolveArg(value, 0);
+        return isImmediate(kind, IrType::U32) && static_cast<StageInputKind>(kind.ImmediateU32()) == StageInputKind::HelperInvocation;
+    };
+    const auto zero = [](const IrValue& value) { return isImmediate(value, IrType::U32) && value.ImmediateU32() == 0u; };
+    auto& lhs = resolveArg(condition, 0);
+    auto& rhs = resolveArg(condition, 1);
+    return (helper(lhs) && zero(rhs)) || (helper(rhs) && zero(lhs));
+}
+
+bool readsOtherLanes(const IrProgram& program, const IrValue& value) {
+    if (value.Opcode() == IrOpcode::ImageSampleRaw) {
+        const auto index = value.Flags<MemoryFlags>().index;
+        return index >= program.Resources().memoryInfo.size() ||
+               (program.Resources().memoryInfo[index].imageSampleFlags & (RdnaImageSampleFlagDerivative | RdnaImageSampleFlagLod | RdnaImageSampleFlagLevelZero)) == 0u;
+    }
+    switch (value.Opcode()) {
+        case IrOpcode::ReadFirstLane:
+        case IrOpcode::ReadLane:
+        case IrOpcode::DppMoveU32:
+        case IrOpcode::DppUpdateU32:
+        case IrOpcode::Permlane16U32:
+        case IrOpcode::BpermuteU32:
+        case IrOpcode::PermuteU32:
+        case IrOpcode::SwizzleU32:
+        case IrOpcode::ImageSampleImplicitLod:
+        case IrOpcode::ImageGatherRaw:
+            return true;
+        default:
+            return false;
+    }
+}
+
+bool reachesOtherLanes(const IrProgram& program, IrValue& value) {
+    std::vector<IrValue*> pending {&value};
+    std::vector<const IrValue*> visited {&value};
+    while (!pending.empty()) {
+        IrValue* current = pending.back();
+        pending.pop_back();
+        for (const IrUse& use : current->OperandUses()) {
+            if (std::ranges::find(visited, use.user) != visited.end()) {
+                continue;
+            }
+            if (readsOtherLanes(program, *use.user)) {
+                return true;
+            }
+            visited.push_back(use.user);
+            pending.push_back(use.user);
+        }
+    }
+    return false;
+}
+
+bool helperLanesOnly(const IrProgram& program, const IrUse& use, bool helpersStayInactive) {
+    return helpersStayInactive && use.user->Opcode() == IrOpcode::SelectU32 && use.operand == 2u && excludesHelperLanes(resolveArg(*use.user, 0)) && !reachesOtherLanes(program, *use.user);
+}
+
+void collectReaders(const IrProgram& program, IrValue& value, std::vector<IrUse>& readers, std::vector<const IrValue*>& visited, bool helpersStayInactive) {
     if (std::ranges::find(visited, &value) != visited.end()) {
         return;
     }
     visited.push_back(&value);
     const std::vector<IrUse> uses = value.OperandUses();
     for (const IrUse& use : uses) {
+        if (helperLanesOnly(program, use, helpersStayInactive)) {
+            continue;
+        }
         if (forwardsWord(use)) {
-            collectReaders(*use.user, readers, visited);
+            collectReaders(program, *use.user, readers, visited, helpersStayInactive);
         } else {
             readers.push_back(use);
         }
     }
 }
 
-void collectReaders(IrValue& value, std::vector<IrUse>& readers) {
+void collectReaders(const IrProgram& program, IrValue& value, std::vector<IrUse>& readers, bool helpersStayInactive) {
     std::vector<const IrValue*> visited;
-    collectReaders(value, readers, visited);
+    collectReaders(program, value, readers, visited, helpersStayInactive);
 }
 
 constexpr std::array<std::pair<std::uint32_t, std::uint32_t>, 2> packedFields {{{8u, 4u}, {16u, 13u}}};
@@ -243,7 +311,7 @@ std::optional<std::size_t> packedField(std::uint32_t offset, std::uint32_t count
     return static_cast<std::size_t>(field - packedFields.begin());
 }
 
-void lowerPackedAncillary(IrProgram& program, IrBuilder& builder, IrValue& ancillary) {
+void lowerPackedAncillary(IrProgram& program, IrBuilder& builder, IrValue& ancillary, bool helpersStayInactive) {
     auto& kind = resolveArg(ancillary, 0);
     if (!isImmediate(kind, IrType::U32) || static_cast<StageInputKind>(kind.ImmediateU32()) != StageInputKind::PackedAncillary) {
         return;
@@ -260,7 +328,9 @@ void lowerPackedAncillary(IrProgram& program, IrBuilder& builder, IrValue& ancil
     }
     std::vector<IrUse> readers = direct;
     for (const IrUse& use : forwarded) {
-        collectReaders(*use.user, readers);
+        if (!helperLanesOnly(program, use, helpersStayInactive)) {
+            collectReaders(program, *use.user, readers, helpersStayInactive);
+        }
     }
     const auto extractsField = [](const IrUse& use) {
         const IrValue& user = *use.user;
@@ -745,9 +815,10 @@ void ConstantFolder::Fold(IrProgram& program, std::span<IrBlock* const> blocks) 
             }
         }
     }
+    const bool helpersStayInactive = program.Resources().stage == IrShaderStage::Pixel && !program.Metadata().wholeQuadMode;
     IrBuilder builder(program);
     for (IrValue* word : words) {
-        lowerPackedAncillary(program, builder, *word);
+        lowerPackedAncillary(program, builder, *word, helpersStayInactive);
     }
 }
 

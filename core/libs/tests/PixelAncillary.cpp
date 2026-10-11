@@ -2,6 +2,7 @@
 #include "Optimization/ConstantFolder.hpp"
 #include "Optimization/DeadCodeEliminator.hpp"
 #include "Optimization/ShaderInfoCollector.hpp"
+#include "RdnaDecoder/RdnaInstruction.hpp"
 #include <array>
 #include <cstdint>
 #include <stdexcept>
@@ -152,6 +153,7 @@ static std::uint32_t Evaluate(const IrValue* value, const Row& row) {
                 case StageInputKind::SampleId: return row.sample;
                 case StageInputKind::Layer: return row.layer;
                 case StageInputKind::FrontFacing: return row.frontFacing ? 1u : 0u;
+                case StageInputKind::HelperInvocation: return 0u;
                 default: break;
             }
             break;
@@ -161,6 +163,7 @@ static std::uint32_t Evaluate(const IrValue* value, const Row& row) {
         case IrOpcode::BitFieldSExtract:
             return BitField(Evaluate(value->Argument(0), row), Evaluate(value->Argument(1), row), Evaluate(value->Argument(2), row), value->Opcode() == IrOpcode::BitFieldSExtract);
         case IrOpcode::SelectU32: return Evaluate(value->Argument(0), row) != 0u ? Evaluate(value->Argument(1), row) : Evaluate(value->Argument(2), row);
+        case IrOpcode::IEqual32: return Evaluate(value->Argument(0), row) == Evaluate(value->Argument(1), row) ? 1u : 0u;
         case IrOpcode::Phi: return Evaluate(value->Argument(row.frontFacing ? 0u : 1u), row);
         default: break;
     }
@@ -253,6 +256,69 @@ static void MergedRefused(IrOpcode opcode, std::uint32_t offset, std::uint32_t c
     }
     Require(false);
 }
+enum class HelperUse { Plain, Wqm, ReadFirstLane, FrontFacing, ExplicitLodSample, ImplicitLodSample };
+
+static IrValue& HelperMasked(IrProgram& program, HelperUse use) {
+    auto& block = Begin(program);
+    IrBuilder builder(program);
+    builder.SetInsertionPoint(block);
+    IrValue& ancillary = AncillaryBuiltin(builder);
+    IrValue& helper = builder.Emit(IrOpcode::GetBuiltin, IrType::U32, {&builder.Constant(static_cast<std::uint32_t>(StageInputKind::HelperInvocation)), &builder.Constant(0u)});
+    IrValue& active = use == HelperUse::FrontFacing ? FrontFacingBuiltin(builder) : builder.Emit(IrOpcode::IEqual32, IrType::Bool, {&helper, &builder.Constant(0u)});
+    IrValue& layer = builder.Emit(IrOpcode::BitFieldUExtract, IrType::U32, {&ancillary, &builder.Constant(16u), &builder.Constant(11u)});
+    IrValue& kept = builder.Emit(IrOpcode::SelectU32, IrType::U32, {&active, &layer, &ancillary});
+    IrValue& user = builder.Emit(IrOpcode::BitwiseOr32, IrType::U32, {&kept, &builder.Constant(SelectOther)});
+    program.Metadata().wholeQuadMode = use == HelperUse::Wqm;
+    if (use == HelperUse::ExplicitLodSample || use == HelperUse::ImplicitLodSample) {
+        IrValue* zero = &builder.Constant(0u);
+        IrValue& image = builder.Emit(IrOpcode::GetImageResource, IrType::ImageResource, {zero, zero, zero, zero, zero, zero, zero, zero});
+        IrValue& sampler = builder.Emit(IrOpcode::GetSamplerResource, IrType::SamplerResource, {zero, zero, zero, zero});
+        IrValue& address = builder.Emit(IrOpcode::MakeImageAddress, IrType::ImageAddress, {&user, zero, zero, zero, zero, zero, zero, zero, zero, zero, zero, zero, zero});
+        IrValue& sample = builder.Emit(IrOpcode::ImageSampleRaw, IrType::U32x4, {&image, &sampler, &address});
+        sample.SetFlags(MemoryFlags {static_cast<std::uint32_t>(program.Resources().memoryInfo.size()), 0u});
+        MemoryInfo info {};
+        info.imageSampleFlags = use == HelperUse::ExplicitLodSample ? RdnaImageSampleFlagLevelZero : 0u;
+        program.Resources().memoryInfo.push_back(info);
+        static_cast<void>(builder.Emit(IrOpcode::ReferenceU32, IrType::Void, {&builder.Emit(IrOpcode::CompositeExtractU32x4, IrType::U32, {&sample, &builder.Constant(0u)})}));
+    }
+    if (use == HelperUse::ReadFirstLane) {
+        static_cast<void>(builder.Emit(IrOpcode::ReferenceU32, IrType::Void, {&builder.Emit(IrOpcode::ReadFirstLane, IrType::U32, {&user, &builder.ConstantBool(true)})}));
+    }
+    End(builder, user);
+    return user;
+}
+static void HelperMaskedValues(HelperUse use) {
+    IrProgram program;
+    auto& user = HelperMasked(program, use);
+    Lower(program);
+    for (const Row& row : Rows) {
+        Require(Evaluate(&user, row) == ((row.layer & 0x7FFu) | SelectOther));
+    }
+}
+static bool WordLowered(HelperUse use) {
+    IrProgram program;
+    static_cast<void>(HelperMasked(program, use));
+    ConstantFolder().Fold(program);
+    DeadCodeEliminator().RemoveIdentities(program);
+    DeadCodeEliminator().Eliminate(program);
+    for (const IrBlock* block : program.BlockOrder()) {
+        for (const IrValue* inst : block->Instructions()) {
+            if (inst->Opcode() == IrOpcode::GetBuiltin && static_cast<StageInputKind>(inst->Argument(0)->Resolve()->ImmediateU32()) == StageInputKind::PackedAncillary) return false;
+        }
+    }
+    return true;
+}
+static void HelperMaskedRefused(HelperUse use) {
+    IrProgram program;
+    static_cast<void>(HelperMasked(program, use));
+    try {
+        Lower(program);
+    } catch (const std::runtime_error& error) {
+        Require(std::string(error.what()).find("unsupported live use") != std::string::npos);
+        return;
+    }
+    Require(false);
+}
 int main() {
     Extract(IrOpcode::BitFieldUExtract, 8u, 4u, StageInputKind::SampleId, 0u);
     Extract(IrOpcode::BitFieldUExtract, 9u, 2u, StageInputKind::SampleId, 1u);
@@ -292,4 +358,10 @@ int main() {
     MergedRefused(IrOpcode::BitwiseOr32, 1u, 0u, false);
     MergedRefused(IrOpcode::BitFieldUExtract, 12u, 4u, false);
     MergedRefused(IrOpcode::BitFieldUExtract, 0u, 2u, true);
+    HelperMaskedValues(HelperUse::Plain);
+    HelperMaskedRefused(HelperUse::Wqm);
+    HelperMaskedRefused(HelperUse::ReadFirstLane);
+    HelperMaskedRefused(HelperUse::FrontFacing);
+    Require(WordLowered(HelperUse::ExplicitLodSample));
+    Require(!WordLowered(HelperUse::ImplicitLodSample));
 }
