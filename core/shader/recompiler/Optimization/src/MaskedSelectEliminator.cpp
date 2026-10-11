@@ -1,6 +1,7 @@
 #include "Optimization/MaskedSelectEliminator.hpp"
 #include "Optimization/DeadCodeEliminator.hpp"
 #include "RdnaDecoder/RdnaInstruction.hpp"
+#include <algorithm>
 #include <optional>
 #include <unordered_map>
 #include <unordered_set>
@@ -337,22 +338,51 @@ std::unordered_set<const IrBlock*> blocksOutsideLoops(const IrProgram& program) 
     return result;
 }
 
-bool unobservedWhereMasked(const IrProgram& program, const std::unordered_set<const IrBlock*>& once, const IrValue& select, const IrValue* mask) {
+using ObservedSelects = std::unordered_map<const IrValue*, std::unordered_set<const IrValue*>>;
+
+// Blocks outside loops and the values one search has visited, indexed by the program's dense ids.
+struct SearchState {
+    std::vector<bool> once;
+    std::vector<std::uint32_t> visits;
+    std::uint32_t search = 0;
+
+    bool Once(const IrBlock* block) const {
+        return block != nullptr && block->Id() < once.size() && once[block->Id()];
+    }
+
+    void Begin() {
+        if (++search == 0u) {
+            std::ranges::fill(visits, 0u);
+            search = 1u;
+        }
+    }
+
+    bool Visit(const IrValue* value) {
+        if (value->Id() >= visits.size()) visits.resize(value->Id() + 1u, 0u);
+        if (visits[value->Id()] == search) return false;
+        visits[value->Id()] = search;
+        return true;
+    }
+};
+
+bool searchUnobserved(const IrProgram& program, SearchState& state, const IrValue& select, const IrValue* mask, const std::unordered_set<const IrValue*>& observed) {
     const auto waveSize = program.WaveSize();
     std::vector<const IrValue*> pending{&select};
-    std::unordered_set<const IrValue*> visited{&select};
+    state.Begin();
+    state.Visit(&select);
+    std::size_t visited = 1;
     while (!pending.empty()) {
         const IrValue* value = pending.back();
         pending.pop_back();
         for (const IrUse& use : value->OperandUses()) {
             const IrValue* user = use.user;
-            if (user->Parent() == nullptr || !once.contains(user->Parent())) return false;
+            if (!state.Once(user->Parent())) return false;
             if (isSelect(user->Opcode()) && use.operand == 1u && implies(user->Argument(0), mask, waveSize)) continue;
             if (user->Opcode() == IrOpcode::LogicalAnd && use.operand < 2u && implies(user->Argument(1u - use.operand), mask, waveSize)) continue;
             if (readsOnlyWhereActive(user->Opcode()) && use.operand + 1u < user->ArgumentCount() && implies(user->Argument(user->ArgumentCount() - 1u), mask, waveSize)) continue;
             if (!user->IsPhi() && !isLaneLocal(user->Opcode()) && !isExplicitLodSample(program, *user)) return false;
-            if (visited.insert(user).second) {
-                if (visited.size() > VisitLimit) return false;
+            if (state.Visit(user)) {
+                if (++visited > VisitLimit || observed.contains(user)) return false;
                 pending.push_back(user);
             }
         }
@@ -360,11 +390,25 @@ bool unobservedWhereMasked(const IrProgram& program, const std::unordered_set<co
     return true;
 }
 
+bool unobservedWhereMasked(const IrProgram& program, SearchState& state, const IrValue& select, const IrValue* mask, ObservedSelects& observed) {
+    auto& known = observed[mask];
+    if (known.contains(&select)) return false;
+    if (searchUnobserved(program, state, select, mask, known)) return true;
+    known.insert(&select);
+    return false;
+}
+
 }
 
 MaskedSelectEliminationStats MaskedSelectEliminator::Eliminate(IrProgram& program) const {
     MaskedSelectEliminationStats stats;
     const auto once = blocksOutsideLoops(program);
+    SearchState state;
+    for (const IrBlock* block : once) {
+        if (block->Id() >= state.once.size()) state.once.resize(block->Id() + 1u, false);
+        state.once[block->Id()] = true;
+    }
+    ObservedSelects observed;
     bool changed = true;
     while (changed) {
         changed = false;
@@ -377,7 +421,8 @@ MaskedSelectEliminationStats MaskedSelectEliminator::Eliminate(IrProgram& progra
                 IrValue* inst = *it;
                 if (!isSelect(inst->Opcode()) || inst->ArgumentCount() != 3u || !inst->HasUses()) continue;
                 const IrValue* mask = inst->Argument(0)->Resolve();
-                if (!alwaysTrue(mask, program.WaveSize()) && (!single || !unobservedWhereMasked(program, once, *inst, mask))) continue;
+                if (!alwaysTrue(mask, program.WaveSize()) && (!single || !unobservedWhereMasked(program, state, *inst, mask, observed))) continue;
+                observed.clear();
                 inst->ReplaceAllUsesWith(inst->Argument(1));
                 inst->Invalidate();
                 inst->SetParent(nullptr);
