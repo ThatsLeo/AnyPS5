@@ -244,6 +244,12 @@ DrawVerdict Driver::draw(QueueState& queue, std::span<const std::uint32_t> packe
     };
     if (graphics.rectList) buildRectList();
     if (!programs.empty() && programResults.back() != nullptr && programResults.back()->barycentricEmulation.active) {
+        static const bool skip = std::getenv("APS5_LOCAL_SKIP_BARY") != nullptr;
+        if (skip && !(!graphics.rectList && graphics.stages.path == Graphics::ShaderPath::Vertex && programs.size() == 2 && programResults[0] != nullptr && stages.size() == 2)) {
+            static std::atomic<std::uint64_t> skipped = 0;
+            if (skipped++ % 100 == 0) std::fprintf(stderr, "[local] skipped %llu draws needing emulated barycentrics after a non-vertex stage\n", static_cast<unsigned long long>(skipped.load()));
+            return DrawVerdict::Nothing;
+        }
         require(!graphics.rectList && graphics.stages.path == Graphics::ShaderPath::Vertex && programs.size() == 2 && programResults[0] != nullptr && stages.size() == 2, "a pixel shader that reads barycentrics without VK_KHR_fragment_shader_barycentric needs a vertex shader before it");
         results.push_back(ShaderRecompiler::BuildBarycentricGeometryShader(*programResults[0], *programResults[1], localDevice->Target(), localDevice->GeometryLimits()));
         stages.insert(stages.begin() + 1, Graphics::CompiledShader{Stage::Geometry, &results.back(), 0});
