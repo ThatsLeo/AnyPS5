@@ -750,7 +750,7 @@ void verifyBindlessTable() {
     const std::array<std::uint32_t, 4> capabilities{29u, spv::CapabilityInt64, spv::CapabilityPhysicalStorageBufferAddresses, spv::CapabilityStorageBuffer8BitAccess};
     const std::array<std::string_view, 2> extensions{"SPV_KHR_physical_storage_buffer", "SPV_KHR_8bit_storage"};
     // A wave64 workgroup on a 32-wide host is held by one subgroup (two lanes per invocation).
-    const auto makeRequest = [&](const std::vector<std::uint32_t>& code) {
+    const auto makeRequest = [&](std::span<const std::uint32_t> code) {
         RecompileRequest request{};
         request.shader = {ShaderStage::Compute, 0x20000u, code, 0, {}};
         request.context.waveSize = 64;
@@ -843,7 +843,7 @@ void verifyBindlessTable() {
         bool nonUniform = false;
         bool switched = false;
     };
-    const auto scan = [&](const std::vector<std::uint32_t>& words) {
+    const auto scan = [&](std::span<const std::uint32_t> words) {
         SpirvScan result;
         for (std::size_t cursor = 5; cursor < words.size();) {
             const auto count = words[cursor] >> 16u;
@@ -976,7 +976,7 @@ void verifyDescriptorPhis() {
     const std::array<std::uint32_t, 2> userData{static_cast<std::uint32_t>(srtAddress), static_cast<std::uint32_t>(srtAddress >> 32u)};
     const std::array<std::uint32_t, 4> capabilities{29u, spv::CapabilityInt64, spv::CapabilityPhysicalStorageBufferAddresses, spv::CapabilityStorageBuffer8BitAccess};
     const std::array<std::string_view, 2> extensions{"SPV_KHR_physical_storage_buffer", "SPV_KHR_8bit_storage"};
-    const auto makeRequest = [&](const std::vector<std::uint32_t>& code, std::uint32_t waveSize = 32u) {
+    const auto makeRequest = [&](std::span<const std::uint32_t> code, std::uint32_t waveSize = 32u) {
         RecompileRequest request{};
         request.shader = {ShaderStage::Compute, 0x21000u, code, 0, {}};
         request.context.waveSize = waveSize;
@@ -993,7 +993,7 @@ void verifyDescriptorPhis() {
         request.layout.pushConstantSizeBytes = 128;
         return request;
     };
-    const auto countOps = [](const std::vector<std::uint32_t>& words, std::uint32_t opcode) {
+    const auto countOps = [](std::span<const std::uint32_t> words, std::uint32_t opcode) {
         std::size_t count = 0;
         for (std::size_t cursor = 5; cursor < words.size();) {
             const auto length = words[cursor] >> 16u;
@@ -1009,7 +1009,7 @@ void verifyDescriptorPhis() {
     const std::vector<std::uint32_t> imageCode{0xf4000400u, 0xfa000050u, 0xf4080500u, 0xfa000020u, 0xbf8cc07fu, 0xbf068010u, 0xbf850003u, 0xf40c0200u, 0xfa000000u, 0xbf820002u, 0xf40c0200u, 0xfa000060u, 0xf4080600u, 0xfa000040u, 0xbf8cc07fu, 0xf09c0f08u, 0x00a20000u, 0xbf8c3f70u, 0xe0700000u, 0x80060000u, 0xbf810000u};
     const std::vector<std::uint32_t> dynamicCode{0xf40c0200u, 0xfa000000u, 0xf4000400u, 0xfa000050u, 0xbf8cc07fu, 0xbf068010u, 0xbf850003u, 0xf4080500u, 0xfa000020u, 0xbf820002u, 0xf4080500u, 0x20000000u, 0xf4080600u, 0xfa000040u, 0xbf8cc07fu, 0xf09c0f08u, 0x00a20000u, 0xbf8c3f70u, 0xe0700000u, 0x80060000u, 0xbf810000u};
 
-    const auto compile = [&](const std::vector<std::uint32_t>& code, std::size_t images, std::size_t samplers) {
+    const auto compile = [&](std::span<const std::uint32_t> code, std::size_t images, std::size_t samplers) {
         auto request = makeRequest(code);
         const auto plan = GetResourcePlan(request);
         require(plan->info.images.size() == images && plan->info.samplers.size() == samplers && plan->info.sampledPairs.size() == 2u, "descriptor Phi: the edges were not given one resource each");
@@ -1092,7 +1092,7 @@ void verifyDescriptorPhis() {
 
     const std::array<std::uint32_t, 7> prologue{0xf4080500u, 0xfa000020u, 0xf4080600u, 0xfa000040u, 0xf40c0200u, 0xfa000000u, 0xbf8cc07fu};
     const std::array<std::uint32_t, 7> epilogue{0xbf8cc07fu, 0xf09c0f08u, 0x00a20000u, 0xbf8c3f70u, 0xe0700000u, 0x80060000u, 0xbf810000u};
-    const auto planImages = [&](const std::vector<std::uint32_t>& body) {
+    const auto planImages = [&](std::span<const std::uint32_t> body) {
         std::vector<std::uint32_t> code(prologue.begin(), prologue.end());
         code.insert(code.end(), body.begin(), body.end());
         code.insert(code.end(), epilogue.begin(), epilogue.end());
@@ -1305,14 +1305,14 @@ void verifyHalfWaveReduction() {
         request.useCache = false;
         return Recompile(request).spirv;
     };
-    const auto reductions = [](const std::vector<std::uint32_t>& spirv, spv::Op opcode) {
+    const auto reductions = [](std::span<const std::uint32_t> spirv, spv::Op opcode) {
         std::uint32_t count = 0;
         for (std::size_t cursor = 5; cursor < spirv.size() && (spirv[cursor] >> 16u) != 0u; cursor += spirv[cursor] >> 16u) {
             if ((spirv[cursor] & 0xffffu) == static_cast<std::uint32_t>(opcode) && (spirv[cursor] >> 16u) == 6u && spirv[cursor + 4u] == spv::GroupOperationReduce) ++count;
         }
         return count;
     };
-    const auto halves = [](const std::vector<std::uint32_t>& spirv, spv::Op opcode, std::uint32_t identity) {
+    const auto halves = [](std::span<const std::uint32_t> spirv, spv::Op opcode, std::uint32_t identity) {
         std::map<std::uint32_t, std::size_t> definitions;
         std::vector<std::size_t> reduces;
         for (std::size_t cursor = 5; cursor < spirv.size() && (spirv[cursor] >> 16u) != 0u; cursor += spirv[cursor] >> 16u) {
@@ -1478,7 +1478,7 @@ void verifyNarrowVertexWave() {
     const auto prepares = [&prepared](std::span<const std::uint32_t> code, std::uint32_t subgroupSize, std::uint32_t userDataBase = 8u) {
         return !prepared(code, subgroupSize, userDataBase).empty();
     };
-    const auto reductions = [](const std::vector<std::uint32_t>& spirv) {
+    const auto reductions = [](std::span<const std::uint32_t> spirv) {
         std::uint32_t count = 0;
         for (std::size_t cursor = 5; cursor < spirv.size() && (spirv[cursor] >> 16u) != 0u; cursor += spirv[cursor] >> 16u) {
             if ((spirv[cursor] & 0xffffu) == spv::OpGroupNonUniformBitwiseOr && (spirv[cursor] >> 16u) == 6u && spirv[cursor + 4u] == spv::GroupOperationReduce) ++count;
@@ -1539,8 +1539,8 @@ void verifyNarrowVertexWave() {
         require(first->source != second->source, "narrow vertex wave: the program prepared for 32 and for 64 lanes shares one translated source");
         require(MatchesPreparedShader(narrowRequest, narrowHandle) && MatchesPreparedShader(wideRequest, wideHandle), "narrow vertex wave: a prepared program did not match its own request");
         require(!MatchesPreparedShader(narrowRequest, wideHandle) && !MatchesPreparedShader(wideRequest, narrowHandle), "narrow vertex wave: a program prepared for one subgroup width matched a request for the other");
-        narrow[narrowFirst ? 1u : 0u] = GetPreparedArtifact(narrowHandle).spirv;
-        wide[narrowFirst ? 1u : 0u] = GetPreparedArtifact(wideHandle).spirv;
+        narrow[narrowFirst ? 1u : 0u] = GetPreparedArtifact(narrowHandle).spirv.Copy();
+        wide[narrowFirst ? 1u : 0u] = GetPreparedArtifact(wideHandle).spirv.Copy();
     }
     require(narrow[0] == narrow[1] && wide[0] == wide[1], "narrow vertex wave: preparing for one subgroup width after the other gave another program than preparing it first");
     require(narrow[0] != wide[0], "narrow vertex wave: s3 of a wave64 vertex program was the same on 32 and 64 lanes");
@@ -1569,7 +1569,7 @@ void verifySingleLaneVertexWave() {
     const auto compiled = [&vertex](std::span<const std::uint32_t> code, std::uint32_t subgroupSize, bool vertexSubgroups) {
         return Recompile(vertex(code, subgroupSize, vertexSubgroups)).spirv;
     };
-    const auto usesSubgroups = [](const std::vector<std::uint32_t>& spirv) {
+    const auto usesSubgroups = [](std::span<const std::uint32_t> spirv) {
         for (std::size_t cursor = 5; cursor < spirv.size() && (spirv[cursor] >> 16u) != 0u; cursor += spirv[cursor] >> 16u) {
             const auto op = spirv[cursor] & 0xffffu;
             if (op == spv::OpCapability && spirv[cursor + 1u] >= spv::CapabilityGroupNonUniform && spirv[cursor + 1u] <= spv::CapabilityGroupNonUniformQuad) return true;
@@ -1578,7 +1578,7 @@ void verifySingleLaneVertexWave() {
         }
         return false;
     };
-    const auto hasConstant = [](const std::vector<std::uint32_t>& spirv, std::uint32_t value) {
+    const auto hasConstant = [](std::span<const std::uint32_t> spirv, std::uint32_t value) {
         for (std::size_t cursor = 5; cursor < spirv.size() && (spirv[cursor] >> 16u) != 0u; cursor += spirv[cursor] >> 16u) {
             if ((spirv[cursor] & 0xffffu) == spv::OpConstant && (spirv[cursor] >> 16u) == 4u && spirv[cursor + 3u] == value) return true;
         }
@@ -2287,7 +2287,7 @@ void verifyComputedTexelOffsets() {
     };
     const auto computed = program(0x100u, 0u);
     const auto constant = program(0xffu, 0x3fu | (1u << 8u));
-    const auto recompile = [&](const std::vector<std::uint32_t>& code, bool offsets) {
+    const auto recompile = [&](std::span<const std::uint32_t> code, bool offsets) {
         RecompileRequest request{};
         request.shader = {ShaderStage::Compute, 0x30000u, code, 0, {}};
         request.target = BufferTarget();
@@ -2307,7 +2307,7 @@ void verifyComputedTexelOffsets() {
         request.context.memory = memory.Regions();
         return Recompile(request).spirv;
     };
-    const auto sampleOperands = [](const std::vector<std::uint32_t>& words) {
+    const auto sampleOperands = [](std::span<const std::uint32_t> words) {
         std::uint32_t mask = 0;
         bool gatherExtended = false;
         for (std::size_t cursor = 5; cursor < words.size();) {
@@ -2392,7 +2392,7 @@ void verifyInt64AtomicCapabilities() {
         0u, 0u, 0u, 0u};
     const std::vector<std::uint32_t> bufferAtomic{0xe1705000u, 0x80012803u, 0xbf810000u};
     const std::vector<std::uint32_t> imageAtomic{0xf03c0308u, 0x00020a08u, 0xbf810000u};
-    const auto compile = [&](const std::vector<std::uint32_t>& code, spv::Capability added) {
+    const auto compile = [&](std::span<const std::uint32_t> code, spv::Capability added) {
         const std::array<std::uint32_t, 4> capabilities{spv::CapabilityInt64, spv::CapabilityPhysicalStorageBufferAddresses, spv::CapabilityStorageBuffer8BitAccess, static_cast<std::uint32_t>(added)};
         RecompileRequest request{};
         request.shader = {ShaderStage::Compute, 0x58000u, code, 0, {}};
@@ -2411,7 +2411,7 @@ void verifyInt64AtomicCapabilities() {
         request.useCache = false;
         return Recompile(request).spirv;
     };
-    const auto declares = [](const std::vector<std::uint32_t>& words, spv::Capability capability) {
+    const auto declares = [](std::span<const std::uint32_t> words, spv::Capability capability) {
         for (std::size_t cursor = 5; cursor < words.size();) {
             const auto count = words[cursor] >> 16u;
             require(count != 0 && count <= words.size() - cursor, "64-bit atomics: truncated SPIR-V instruction");
@@ -2468,7 +2468,7 @@ void verifySpecializedBufferAtomicBindings() {
     require(tables == 0, "specialized buffer atomic: a buffer_atomic_inc through a V# the program specializes binds the address tables");
     require(faults == 1 && result.bdaAbiVersion == BdaAbi::Version, "specialized buffer atomic: the program has no fault buffer for its unaligned atomic");
     require(atomicElements == 1, "specialized buffer atomic: the V# element is not reported as atomic");
-    const std::vector<std::uint32_t>& words = result.spirv;
+    const auto words = result.spirv.Words();
     std::uint32_t faultFunction = 0;
     std::size_t faultCalls = 0;
     bool physical = false;
@@ -2652,7 +2652,7 @@ void verifyUnnormalizedSamplers() {
     };
     const std::array<std::uint32_t, 3> capabilities{1u, static_cast<std::uint32_t>(spv::CapabilityImageGatherExtended), static_cast<std::uint32_t>(spv::CapabilityMinLod)};
     std::uint64_t nextAddress = 0x40000u;
-    const auto recompile = [&](const std::vector<std::uint32_t>& code, const std::array<std::uint32_t, 16>& data, std::uint64_t address = 0u, bool offsets = false) {
+    const auto recompile = [&](std::span<const std::uint32_t> code, const std::array<std::uint32_t, 16>& data, std::uint64_t address = 0u, bool offsets = false) {
         RecompileRequest request{};
         request.shader = {ShaderStage::Compute, address != 0u ? address : (nextAddress += 0x1000u), code, 0, {}};
         request.context.waveSize = 32;
@@ -2680,7 +2680,7 @@ void verifyUnnormalizedSamplers() {
     const auto proven = [&](const RecompileResult& result, bool expected) {
         return flags(result, DescriptorRole::GuestSamplers) == std::vector<bool>{expected} && flags(result, DescriptorRole::GuestImages) == std::vector<bool>{expected};
     };
-    const auto auditSpirv = [](const std::vector<std::uint32_t>& words) {
+    const auto auditSpirv = [](std::span<const std::uint32_t> words) {
         std::size_t samples = 0;
         for (std::size_t cursor = 5; cursor < words.size();) {
             const auto count = words[cursor] >> 16u;
@@ -2702,7 +2702,7 @@ void verifyUnnormalizedSamplers() {
     auditSpirv(accepted.spirv.Words());
     const auto plain = recompile(lz, userData(normalized), 0x40000u);
     require(proven(plain, false), "unnormalized samplers: a normalized S# was flagged");
-    require(plain.variantId == accepted.variantId && plain.spirv.Words() == accepted.spirv.Words(), "unnormalized samplers: the unnormalized S# compiled another variant");
+    require(plain.variantId == accepted.variantId && plain.spirv == accepted.spirv, "unnormalized samplers: the unnormalized S# compiled another variant");
 
     for (const std::uint32_t mimg : {0xf0900f08u, 0xf0800f08u, 0xf0940f08u, 0xf0840f08u, 0xf0880f08u}) {
         const auto result = recompile(program(mimg), userData(unnormalized));
@@ -2736,7 +2736,7 @@ void verifyUnnormalizedSamplers() {
         code.insert(code.end(), {0x7e040280u, 0x7e060280u, 0x7e080280u, 0x7e0a0280u, 0x7e0c0280u, mimg, 0x00400801u, 0xe0700000u, 0x80030800u, 0xbf810000u});
         return code;
     };
-    const auto foldedSamples = [](const std::vector<std::uint32_t>& words) {
+    const auto foldedSamples = [](std::span<const std::uint32_t> words) {
         std::vector<std::uint32_t> exact;
         std::vector<std::uint32_t> sums;
         std::vector<std::uint32_t> coordinates;
@@ -2751,7 +2751,7 @@ void verifyUnnormalizedSamplers() {
         }
         return !coordinates.empty() && std::ranges::all_of(coordinates, [&](std::uint32_t id) { return std::ranges::count(sums, id) != 0 && std::ranges::count(exact, id) != 0; });
     };
-    const auto sampleMasks = [](const std::vector<std::uint32_t>& words) {
+    const auto sampleMasks = [](std::span<const std::uint32_t> words) {
         std::vector<std::uint32_t> masks;
         for (std::size_t cursor = 5; cursor < words.size();) {
             const auto count = words[cursor] >> 16u;
@@ -2811,7 +2811,7 @@ void verifyUnnormalizedSamplers() {
     pixel.target.subgroupSize = 64;
     pixel.layout.pushConstantSizeBytes = 128;
     pixel.useCache = false;
-    const auto implicitSamples = [](const std::vector<std::uint32_t>& words) {
+    const auto implicitSamples = [](std::span<const std::uint32_t> words) {
         std::size_t samples = 0;
         for (std::size_t cursor = 5; cursor < words.size();) {
             const auto count = words[cursor] >> 16u;

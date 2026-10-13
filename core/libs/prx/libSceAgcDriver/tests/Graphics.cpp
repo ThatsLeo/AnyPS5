@@ -4599,7 +4599,7 @@ void aliasedBufferViewTests() {
         Require(declared == views, "the pixel shader declared the guest buffers as" + names + ", not as the expected " + std::to_string(views.size()) + " aliased variables");
         const std::array<AgcDriver::Graphics::CompiledShader, 2> shaders{{{ShaderRecompiler::ShaderStage::Vertex, &vertex, 0}, {ShaderRecompiler::ShaderStage::Fragment, &pixel, 0}}};
         AgcDriver::Graphics::ValidateShaders(shaders, state, subgroup, false, false, false, false, false, true);
-        auto unaliased = pixel.spirv.Words();
+        auto unaliased = pixel.spirv.Copy();
         for (std::size_t at = 5; at < unaliased.size() && (unaliased[at] >> 16u) != 0; at += unaliased[at] >> 16u) {
             if (static_cast<spv::Op>(unaliased[at] & 0xffffu) == spv::OpDecorate && unaliased[at + 2] == spv::DecorationAliased) unaliased[at + 2] = spv::DecorationRestrict;
         }
@@ -4949,7 +4949,7 @@ void unorm10_11_11TargetTests() {
     const auto packed = ShaderRecompiler::Recompile(request);
     const auto unpacked = ShaderRecompiler::Recompile(plain);
     Require(packed.variantId == unpacked.variantId && packed.variantId == ShaderRecompiler::GetPreparedArtifact(*prepared).variantId, "the packed draw did not reuse the registered artifact");
-    Require(packed.PipelineVariantId() != unpacked.PipelineVariantId() && packed.spirv.Words() != unpacked.spirv.Words(), "the export packing did not specialize the module");
+    Require(packed.PipelineVariantId() != unpacked.PipelineVariantId() && !(packed.spirv == unpacked.spirv), "the export packing did not specialize the module");
     Require(ShaderRecompiler::Recompile(request).PipelineVariantId() == packed.PipelineVariantId(), "the packed specialization was not reused");
     ShaderRecompiler::RecompileResult vertex;
     vertex.spirv = makeModule({});

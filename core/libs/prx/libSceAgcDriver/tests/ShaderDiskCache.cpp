@@ -69,7 +69,7 @@ bool sameBindings(const std::vector<DescriptorBinding>& left, const std::vector<
 
 void requireSameArtifact(const CompiledShaderArtifact& left, const CompiledShaderArtifact& right, const char* what) {
     const std::string prefix = std::string(what) + ": ";
-    require(left.spirv.Words() == right.spirv.Words(), prefix + "SPIR-V differs");
+    require(left.spirv == right.spirv, prefix + "SPIR-V differs");
     require(left.bdaAbiVersion == right.bdaAbiVersion, prefix + "BDA ABI version differs");
     require(left.runtimeAbiVersion == right.runtimeAbiVersion, prefix + "runtime ABI version differs");
     require(left.memoryOffsetDword == right.memoryOffsetDword, prefix + "memory offset differs");
@@ -595,6 +595,24 @@ void verifyStore() {
     require(ShaderDiskCache::Load(key, loaded), "a rewritten entry does not load");
 }
 
+void verifyPersist() {
+    SampleRequest sample;
+    const auto key = sample.Key();
+    const auto variant = sampleVariant();
+    const auto persisted = ShaderDiskCache::Persist(key, variant);
+#ifdef _WIN32
+    require(persisted == nullptr, "an entry was persisted where the cache does not map entries");
+#else
+    require(persisted != nullptr, "a persisted entry was not read back");
+    requireSameVariant(variant, *persisted, "persist round trip");
+    const auto path = ShaderDiskCache::EntryDirectory() / ShaderDiskCache::EntryName(key);
+    require(WriteFileAtomically(path, std::vector<std::byte>(64, std::byte{0x5a})), "cannot replace the persisted entry");
+    std::error_code error;
+    std::filesystem::remove(path, error);
+    requireSameArtifact(variant.artifact, persisted->artifact, "a persisted entry whose file was replaced and removed");
+#endif
+}
+
 struct ComputeRequest {
     std::vector<std::uint32_t> code{0xe0700000u, 0x80000000u, 0xbf810000u};
     std::array<std::uint32_t, 4> userData{0x10000000u, 0x00000000u, 0x40u, 0x00027facu};
@@ -945,7 +963,7 @@ void verifyVertexTypeSpecialization() {
                 }
             }
             require(checked == 4u, "vertex specialization lost attribute loads");
-            require(artifact.spirv.Words() == original, "vertex specialization mutated the shared template");
+            require(std::ranges::equal(artifact.spirv.Words(), original), "vertex specialization mutated the shared template");
         }
     }
     auto invalid = artifact;
@@ -1858,6 +1876,7 @@ int main(int argc, char** argv) {
         verifyPlanRoundTrip();
         verifyPlanKey();
         verifyStore();
+        verifyPersist();
         verifyAcrossProcesses(argv[0]);
         verifyPlanAcrossProcesses(argv[0]);
         verifyEmissionFailureMemo();
