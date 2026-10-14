@@ -25,6 +25,7 @@ struct SpirvTargetOptions {
     bool fragmentDescriptorSet = false;
     bool float16DenormPreserve = false;
     bool spannedWaves = false;
+    bool spannedAnySubgroup = false;
 };
 
 class SpirvEmitter {
@@ -33,6 +34,8 @@ public:
     [[nodiscard]] std::vector<std::uint32_t> Emit(const IrProgram& program, const ShaderStageInputInfo& inputInfo, const CompiledBindingLayout& bindings, const SpirvTargetOptions& target) const;
 
 };
+
+bool& LastEmitSpannedAnySubgroup();
 
 }
 

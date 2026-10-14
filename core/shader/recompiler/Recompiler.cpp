@@ -454,6 +454,8 @@ CompiledVariant compileVariant(const RecompileRequest& request, IrProgram progra
     targetOptions.float16DenormPreserve = request.target.float16DenormPreserve;
     static const bool spannedWaves = std::getenv("APS5_SPANNED_WAVE") != nullptr;
     targetOptions.spannedWaves = spannedWaves;
+    static const bool spannedAnySubgroup = std::getenv("APS5_SPANNED_ANY_SUBGROUP") != nullptr;
+    targetOptions.spannedAnySubgroup = spannedAnySubgroup;
 
     constexpr SpirvEmitter spirvEmitter;
     CompiledShaderArtifact result;
@@ -483,7 +485,7 @@ CompiledVariant compileVariant(const RecompileRequest& request, IrProgram progra
     for (std::uint32_t index = 0; index < program.Info().images.size(); ++index) {
         if (program.Info().images[index].indirectRoot != ImageResource::NoIndirectImage) result.runtimeImageResources.push_back(index);
     }
-    result.hostSubgroupSize = HostSubgroupSize(request);
+    result.hostSubgroupSize = LastEmitSpannedAnySubgroup() ? 1u : HostSubgroupSize(request);
     result.vertexOffsetSgpr = program.Info().vertexOffsetSgpr;
     result.instanceOffsetSgpr = program.Info().instanceOffsetSgpr;
     result.vertexOffsetShared = program.Info().vertexOffsetShared;

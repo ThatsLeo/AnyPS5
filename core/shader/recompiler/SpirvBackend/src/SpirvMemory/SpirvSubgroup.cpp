@@ -139,6 +139,11 @@ namespace ShaderRecompiler
             EmitSubgroupShuffle(state, type, result, value, EmitHostSubgroupLane(state, lane));
             return;
         }
+        if (state.spannedAnySubgroup) {
+            const auto half = EmitBinaryU32(state, spv::OpBitwiseAnd, SpannedLane(state), ConstantU32(state, 32u));
+            SpannedShuffle(state, type, result, value, EmitBinaryU32(state, spv::OpBitwiseOr, half, EmitBinaryU32(state, spv::OpBitwiseAnd, lane, ConstantU32(state, 31u))));
+            return;
+        }
         state.module.AddFunction(spv::OpGroupNonUniformShuffle, type, result, ConstantU32(state, spv::ScopeSubgroup), value, EmitBinaryU32(state, spv::OpBitwiseAnd, lane, ConstantU32(state, 31u)));
     }
 
