@@ -1,0 +1,47 @@
+**frames 20:30** from present 20: 30 presents, frame p50 589.2 / p90 598.7 / p99 617.0 / max 617.0 ms, GPU busy 467.1 ms per present
+Intel(R) Arc(tm) Graphics (MTL), Intel open-source Mesa driver Mesa 26.2.4, Linux 7.2.10-200.fc44.x86_64, 3840x2160, commit e1f470632406, dropped: no
+
+```json
+{"commit":"e1f470632406","dirty":false,"env":{"APS5_LOCAL_R2":"dev","APS5_NO_LIBRARY_PREBUILD":"1","APS5_PLAYGO_UNLISTED_CHUNKS":"absent","APS5_TRACE_FRAMES":"20:30"},"gpu":"Intel(R) Arc(tm) Graphics (MTL)","driver":"Intel open-source Mesa driver Mesa 26.2.4","os":"Linux 7.2.10-200.fc44.x86_64","resolution":"3840x2160","window":{"spec":"frames 20:30","first_present":20,"ms":17620.607},"presents":30,"frame_ms":{"p50":589.203,"p90":598.715,"p99":616.982,"max":616.982},"gpu_busy_ms_per_present":467.076,"worker_busy_pct":{"queue worker 0x0":97.118,"queue worker 0x20":96.685},"top_phases_ms_per_frame":{"Driver.Packet":1135.234,"Driver.Packet.memory_wait":549.57,"Driver.Packet.device_lock":488.561,"Driver.Present":287.754,"VideoOut.Flip":278.324,"VideoOut.Flip.present":278.272,"Driver.Present.render_fence_wait":267.195,"Vulkan.Retire":267.193},"trace_dropped":false,"trace":"aps5-trace-e1f470632406-711859.json.gz"}
+```
+
+**Slowest frames** (largest slices inside each, inclusive)
+
+- present 33: 617.0 ms at 7636 ms: Driver.Packet (queue worker 0x20) 613.3, Driver.Packet (queue worker 0x0) 602.5, Driver.Packet.memory_wait (queue worker 0x20) 588.4, Driver.Packet.device_lock (queue worker 0x0) 509.0
+- present 24: 601.7 ms at 2323 ms: Driver.Packet (queue worker 0x20) 599.0, Driver.Packet.memory_wait (queue worker 0x20) 593.3, Driver.Packet (queue worker 0x0) 589.0, Driver.Packet.device_lock (queue worker 0x0) 511.7
+- present 40: 598.7 ms at 11729 ms: Driver.Packet (queue worker 0x20) 593.4, Driver.Packet.memory_wait (queue worker 0x20) 591.5, Driver.Packet (queue worker 0x0) 585.3, Driver.Packet.device_lock (queue worker 0x0) 489.3
+- present 28: 598.1 ms at 4691 ms: Driver.Packet (queue worker 0x20) 594.3, Driver.Packet (queue worker 0x0) 575.5, Driver.Packet.memory_wait (queue worker 0x20) 571.4, Driver.Packet.device_lock (queue worker 0x0) 486.3
+- present 37: 596.7 ms at 9991 ms: Driver.Packet (queue worker 0x20) 594.8, Driver.Packet.memory_wait (queue worker 0x20) 590.4, Driver.Packet (queue worker 0x0) 582.8, Driver.Packet.device_lock (queue worker 0x0) 504.3
+
+**Threads** (ms per frame)
+
+| thread | busy | wait | untraced | in slices < 20 us | largest |
+|---|---|---|---|---|---|
+| queue worker 0x0 | 564.2 (96 %) | 5.1 (1 %) | 18.0 | 5.6 | Driver.Packet 569.3, Driver.Completion 0.0 |
+| presenter | 9.3 (2 %) | 278.5 (47 %) | 299.5 | 0.1 | VideoOut.Flip 278.3, Driver.Present 9.5 |
+| title | 0.1 (0 %) | 0.0 (0 %) | 587.2 | 0.0 | Shader.ResolveAbi 0.1 |
+| queue worker 0x20 | 7.3 (1 %) | 560.7 (95 %) | 19.3 | 0.1 | Driver.Packet 564.8, Driver.EndSubmission 3.1 |
+| gpu | 417.4 (71 %) | 0.0 (0 %) | 170.0 | 0.0 | batch 417.4 |
+
+**Largest slices** (ms per frame, inclusive, all threads): Driver.Packet 1134.1, Driver.Packet.memory_wait 549.5, Driver.Packet.device_lock 488.4, batch 417.4, Driver.Present 287.8, VideoOut.Flip 278.3, VideoOut.Flip.present 278.3, Driver.Present.render_fence_wait 267.2, Vulkan.Retire 267.2, Vulkan.Retire.wait 267.2
+
+**Longest waits**
+
+- Driver.Packet.memory_wait (queue worker 0x20) 593.4 ms at 7383 ms, present 32
+- Driver.Packet.memory_wait (queue worker 0x20) 588.1 ms at 14422 ms, present 44
+- Driver.Packet.memory_wait (queue worker 0x20) 585.7 ms at 13240 ms, present 42
+- Driver.Packet.memory_wait (queue worker 0x20) 585.1 ms at 8569 ms, present 34
+- Driver.Packet.memory_wait (queue worker 0x20) 585.0 ms at 6200 ms, present 30
+- Driver.Packet.memory_wait (queue worker 0x20) 584.7 ms at 3845 ms, present 26
+- Driver.Packet.memory_wait (queue worker 0x20) 583.5 ms at 2669 ms, present 24
+- Driver.Packet.memory_wait (queue worker 0x20) 583.5 ms at 4433 ms, present 27
+- Driver.Packet.memory_wait (queue worker 0x20) 582.4 ms at 6791 ms, present 31
+- Driver.Packet.memory_wait (queue worker 0x20) 581.7 ms at 15019 ms, present 45
+
+**Largest GPU batches** (GPU ranges inside, and the CPU slices that recorded each, inclusive)
+
+- batch 406: 330.4 ms at 7545 ms, present 32: GPU no ranges; recorded by Driver.Packet (queue worker 0x0) 37.5, Driver.Packet.dispatch (queue worker 0x0) 14.1, Driver.Dispatch (queue worker 0x0) 14.1, Vulkan.Dispatch (queue worker 0x0) 14.0
+- batch 805: 329.2 ms at 14587 ms, present 44: GPU no ranges; recorded by Driver.Packet (queue worker 0x0) 37.9, Driver.Packet.dispatch (queue worker 0x0) 14.1, Driver.Dispatch (queue worker 0x0) 14.0, Vulkan.Dispatch (queue worker 0x0) 13.9
+- batch 707: 327.9 ms at 12815 ms, present 41: GPU no ranges; recorded by Driver.Packet (queue worker 0x0) 38.6, Driver.Packet.dispatch (queue worker 0x0) 14.1, Driver.Dispatch (queue worker 0x0) 14.1, Vulkan.Dispatch (queue worker 0x0) 14.0
+- batch 772: 327.7 ms at 13997 ms, present 43: GPU no ranges; recorded by Driver.Packet (queue worker 0x0) 37.6, Driver.Packet.dispatch (queue worker 0x0) 14.0, Driver.Dispatch (queue worker 0x0) 13.7, Vulkan.Dispatch (queue worker 0x0) 13.6
+- batch 45: 327.6 ms at 1066 ms, present 21: GPU no ranges; recorded by Driver.Packet (queue worker 0x0) 37.6, Driver.Packet.dispatch (queue worker 0x0) 14.2, Driver.Dispatch (queue worker 0x0) 14.2, Vulkan.Dispatch (queue worker 0x0) 14.1
