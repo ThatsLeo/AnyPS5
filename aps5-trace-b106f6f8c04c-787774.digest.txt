@@ -1,0 +1,48 @@
+**seconds 20:20** from present 1158: 1197 presents, frame p50 16.7 / p90 16.8 / p99 17.1 / max 50.9 ms, GPU busy 2.8 ms per present
+Intel(R) Arc(tm) Graphics (MTL), Intel open-source Mesa driver Mesa 26.2.4, Linux 7.2.10-200.fc44.x86_64, 3840x2160, commit b106f6f8c04c, dropped: no
+
+```json
+{"commit":"b106f6f8c04c","dirty":false,"env":{"APS5_TRACE_SECONDS":"20:20"},"gpu":"Intel(R) Arc(tm) Graphics (MTL)","driver":"Intel open-source Mesa driver Mesa 26.2.4","os":"Linux 7.2.10-200.fc44.x86_64","resolution":"3840x2160","window":{"spec":"seconds 20:20","first_present":1158,"ms":20003.704},"presents":1197,"frame_ms":{"p50":16.685,"p90":16.842,"p99":17.085,"max":50.905},"gpu_busy_ms_per_present":2.815,"worker_busy_pct":{"queue worker 0x0":33.8},"top_phases_ms_per_frame":{"VideoOut.Flip":9.727,"VideoOut.Flip.vblank_wait":5.79,"Driver.Packet":5.646,"Graphics.Draw":4.781,"Graphics.Draw.draw_and_resource_release":4.701,"Driver.Present":3.895,"VideoOut.Flip.present":3.895,"Driver.Packet.device_lock":3.037},"trace_dropped":false,"trace":"aps5-trace-b106f6f8c04c-787774.json.gz"}
+```
+
+**Slowest frames** (largest slices inside each, inclusive)
+
+- present 1480: 50.9 ms at 5372 ms: Driver.Packet (queue worker 0x0) 42.2, Graphics.Draw (draw committer) 40.8, Graphics.Draw.draw_and_resource_release (draw committer) 40.6, Driver.Packet.draw (queue worker 0x0) 37.3
+- present 1908: 24.3 ms at 12546 ms: Driver.WorkerWait (queue worker 0x0) 18.5, Driver.WorkerWait.idle_and_completion_poll (queue worker 0x0) 18.5, VideoOut.Flip (presenter) 17.4, VideoOut.Flip.present (presenter) 17.3
+- present 1297: 19.7 ms at 2319 ms: Driver.WorkerWait (queue worker 0x0) 11.1, Driver.WorkerWait.idle_and_completion_poll (queue worker 0x0) 11.1, Driver.Packet (queue worker 0x0) 8.3, Graphics.Draw (draw committer) 6.7
+- present 1976: 17.9 ms at 13680 ms: Driver.WorkerWait (queue worker 0x0) 12.4, Driver.WorkerWait.idle_and_completion_poll (queue worker 0x0) 12.4, VideoOut.Flip (presenter) 11.0, VideoOut.Flip.vblank_wait (presenter) 7.4
+- present 1757: 17.5 ms at 10027 ms: Driver.WorkerWait (queue worker 0x0) 11.8, Driver.WorkerWait.idle_and_completion_poll (queue worker 0x0) 11.8, Driver.Packet (queue worker 0x0) 5.1, Graphics.Draw (draw committer) 4.6
+
+**Threads** (ms per frame)
+
+| thread | busy | wait | untraced | in slices < 20 us | largest |
+|---|---|---|---|---|---|
+| title | 0.0 (0 %) | 0.0 (0 %) | 16.7 | 0.3 | Shader.ResolveAbi 0.0, Shader.ResolveGraphicsStagesAbi 0.0 |
+| shader prepare | 0.0 (0 %) | 0.0 (0 %) | 16.7 | 0.0 | Vulkan.GraphicsPipelinePrebuild 0.0 |
+| queue worker 0x0 | 5.3 (32 %) | 10.9 (65 %) | 0.5 | 1.3 | Driver.Packet 5.3 |
+| draw committer | 4.7 (28 %) | 0.0 (0 %) | 12.0 | 0.6 | Graphics.Draw 4.7 |
+| presenter | 3.0 (18 %) | 6.7 (40 %) | 7.0 | 0.1 | VideoOut.Flip 9.7, Driver.Present 0.0 |
+| gpu | 2.6 (15 %) | 0.0 (0 %) | 14.1 | 0.0 | batch 2.6 |
+
+**Largest slices** (ms per frame, inclusive, all threads): Driver.WorkerWait 10.9, Driver.WorkerWait.idle_and_completion_poll 10.9, VideoOut.Flip 9.7, VideoOut.Flip.vblank_wait 5.8, Driver.Packet 5.3, Graphics.Draw 4.7, Graphics.Draw.draw_and_resource_release 4.6, Driver.Present 3.9, VideoOut.Flip.present 3.9, Driver.Packet.device_lock 3.0
+
+**Longest waits**
+
+- Driver.WorkerWait (queue worker 0x0) 23.3 ms at 12541 ms, present 1907
+- Driver.WorkerWait (queue worker 0x0) 17.6 ms at 2313 ms, present 1296
+- Driver.WorkerWait (queue worker 0x0) 17.0 ms at 10022 ms, present 1756
+- Driver.WorkerWait (queue worker 0x0) 14.4 ms at 1961 ms, present 1275
+- Driver.WorkerWait (queue worker 0x0) 14.0 ms at 1644 ms, present 1256
+- Driver.WorkerWait (queue worker 0x0) 13.9 ms at 12989 ms, present 1934
+- Driver.WorkerWait (queue worker 0x0) 13.7 ms at 14658 ms, present 2034
+- Driver.WorkerWait (queue worker 0x0) 13.4 ms at 15743 ms, present 2099
+- Driver.WorkerWait (queue worker 0x0) 13.3 ms at 13523 ms, present 1966
+- Driver.WorkerWait (queue worker 0x0) 13.3 ms at 8936 ms, present 1691
+
+**Largest GPU batches** (GPU ranges inside, and the CPU slices that recorded each, inclusive)
+
+- batch 1046: 4.6 ms at 17464 ms, present 2202: GPU no ranges; recorded by Graphics.Draw (draw committer) 5.5, Graphics.Draw.draw_and_resource_release (draw committer) 5.4, Resources.Complete (draw committer) 0.6, Resources.Prepare (draw committer) 0.0
+- batch 181: 4.4 ms at 3015 ms, present 1338: GPU no ranges; recorded by Graphics.Draw (draw committer) 5.1, Graphics.Draw.draw_and_resource_release (draw committer) 5.0, Resources.Complete (draw committer) 0.6, Resources.Prepare (draw committer) 0.1
+- batch 347: 4.2 ms at 5818 ms, present 1504: GPU no ranges; recorded by Graphics.Draw (draw committer) 5.2, Graphics.Draw.draw_and_resource_release (draw committer) 5.0, Resources.Complete (draw committer) 0.6, Resources.Prepare (draw committer) 0.0
+- batch 811: 4.1 ms at 13543 ms, present 1967: GPU no ranges; recorded by Graphics.Draw (draw committer) 5.3, Graphics.Draw.draw_and_resource_release (draw committer) 5.2, Resources.Complete (draw committer) 0.5, Resources.Prepare (draw committer) 0.0
+- batch 6: 4.1 ms at 96 ms, present 1163: GPU no ranges; recorded by Graphics.Draw (draw committer) 4.8, Graphics.Draw.draw_and_resource_release (draw committer) 4.7, Resources.Complete (draw committer) 0.4, Resources.Prepare (draw committer) 0.0
